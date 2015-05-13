@@ -1,4 +1,5 @@
 #!/usr/bin/env ruby
+# coding: utf-8
 
 require 'webrick'
 require 'webrick/httpproxy'
@@ -9,6 +10,76 @@ require "pathname"
 require "stringio"
 require "zlib"
 require "optparse"
+require 'digest/md5'
+require 'cgi'
+require 'fileutils'
+
+class PCache
+  @@cache_dir = nil
+
+  def self.set_default_cache_dir(dir)
+    @@cache_dir = dir
+  end
+
+  def initialize
+    raise 'PCache#initialize: cache directory specified nil!' if @@cache_dir.nil?
+    @dir = Pathname.new(File.expand_path(@@cache_dir))
+    puts @dir
+    raise "#{@dir} is not directory!" if @dir.exist? && !@dir.directory?
+    @m = Mutex.new
+  end
+
+  def clear
+    @m.synchronize do
+      FileUtils.rm_rf(@dir)
+    end
+  end
+
+  def make_path(key)
+    hash = Digest::MD5.hexdigest(key)[0, 3]
+    filebody = CGI.escape(key)
+    Pathname.new(File.join(@dir, hash, filebody))
+  end
+
+  def [](key)
+    path = make_path(key)
+    data = nil
+    @m.synchronize do
+      if File.exist?(path)
+        open(path, 'r') do |f|
+          data = f.read
+        end
+      end
+    end
+    if data
+      h = Marshal.load(data)
+      value = WEBrick::HTTPResponse.new(HTTPVersion: h[:http_version])
+      value.body = h[:body]
+      h[:header].each do |k, v|
+        value[k] = v
+      end
+    end
+    value
+  end
+
+  def []=(key, value)
+    path = make_path(key)
+
+    # value (WEBrick::Responseオブジェクト) はIOオブジェクトを含むので単純にMarshal.dumpできない
+    data = Marshal.dump(
+      header: value.header,
+      body: value.body,
+      http_version: value.http_version
+    )
+    @m.synchronize do
+      FileUtils.mkdir_p(path.dirname)
+      open(path, 'w') do |f|
+        f.write(data)
+      end
+    end
+    value
+  end
+end
 
 class CocProxyCommand
   VERSION = "$Revision$"
@@ -61,6 +132,13 @@ class CocProxyCommand
         @disable_double_screen = c
       end
 
+      @cache_class = Hash
+      parser.on("--persistent[=persistent-dir]") do |persistent_dir|
+        persistent_dir ||= '/tmp/pcocproxy-cache'
+        PCache.set_default_cache_dir(persistent_dir)
+        @cache_class = PCache
+      end
+
       parser.on("--version", "Show version string `#{VERSION}'") do
         puts VERSION
         exit
@@ -104,12 +182,17 @@ class CocProxyCommand
       puts "    #{index+1}. #{item}"
     end
 
-    srv = ArrogationProxyServer.new(server_config)
+    srv = ArrogationProxyServer.new(server_config, @cache_class)
     trap(:INT) { srv.shutdown }
     srv.start
   end
 
   class ArrogationProxyServer < WEBrick::HTTPProxyServer
+    def initialize(server_config, cache_class)
+      super(server_config)
+      @cache = cache_class.new
+    end
+
     def proxy_service(req, res)
 
       referer = req.header["referer"]
@@ -163,7 +246,7 @@ class CocProxyCommand
           res.body = content
           puts "Rewrote: <= #{local_path}"
         else
-          @cache = {} if !@cache || req.query.key?("clearcache")
+          @cache.clear if req.query.key?("clearcache")
           r = @cache[req.request_uri.to_s]
 
           if r
