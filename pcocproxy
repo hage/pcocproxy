@@ -53,7 +53,7 @@ class PCache
     end
     if data
       h = Marshal.load(data)
-      value = WEBrick::HTTPResponse.new(HTTPVersion: h[:http_version])
+      value = WEBrick::HTTPResponse.new(:HTTPVersion => h[:http_version])
       value.body = h[:body]
       h[:header].each do |k, v|
         value[k] = v
@@ -67,9 +67,9 @@ class PCache
 
     # value (WEBrick::Responseオブジェクト) はIOオブジェクトを含むので単純にMarshal.dumpできない
     data = Marshal.dump(
-      header: value.header,
-      body: value.body,
-      http_version: value.http_version
+      :header => value.header,
+      :body => value.body,
+      :http_version => value.http_version
     )
     @m.synchronize do
       FileUtils.mkdir_p(path.dirname)
