@@ -2,7 +2,7 @@ pCocProxy as Persistent CocProxy
 ================================
 めんどくさことしない置換プロキシーのキャッシュを永続化した変造版
 
-詳しいことは(オリジナルのCocProxyを参照)[http://coderepos.org/share/wiki/CocProxy]のこと。
+詳しいことは[オリジナルのCocProxyを参照](http://coderepos.org/share/wiki/CocProxy)のこと。
 
 
 使い方
